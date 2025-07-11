@@ -1,7 +1,9 @@
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 
 /**
- * Cloudflare Worker for uploading files to Tebi with round-robin load balancing between two accounts.
+ * Enhanced Cloudflare Worker for uploading files to Tebi with basic load
+ * balancing and a small web UI. Designed to handle many concurrent
+ * requests by avoiding global state when selecting the upload account.
  *
  * Environment variables expected by this Worker:
  * - TEBI_A_ACCESS_KEY_ID
@@ -25,17 +27,32 @@ interface Env {
   TEBI_B_ENDPOINT: string;
 }
 
-// Global flag used for simple round-robin selection
-let useAccountA = true;
+interface Account {
+  accessKeyId: string;
+  secretAccessKey: string;
+  bucket: string;
+  endpoint: string;
+}
+
+// Simple in-memory stats. These reset when the Worker restarts but
+// provide basic insight during runtime.
+const stats = {
+  byAccountA: 0,
+  byAccountB: 0,
+  total: 0,
+};
+
+const html = await (async () => {
+  const decoder = new TextDecoder();
+  const data = await fetch(new URL('./frontend.html', import.meta.url)).then(r => r.arrayBuffer());
+  return decoder.decode(data);
+})();
 
 /**
  * Upload the provided file to Tebi using the specified account credentials.
  * Returns the public URL of the uploaded object.
  */
-async function uploadFile(
-  file: File,
-  account: { accessKeyId: string; secretAccessKey: string; bucket: string; endpoint: string }
-): Promise<string> {
+async function uploadFile(file: File, account: Account): Promise<string> {
   const client = new S3Client({
     region: "us-east-1",
     credentials: {
@@ -62,53 +79,78 @@ async function uploadFile(
   return `${trimmed}/${account.bucket}/${key}`;
 }
 
+function chooseAccount(env: Env): { account: Account; name: "A" | "B" } {
+  // Use random selection to avoid contention between concurrent requests
+  const useA = Math.random() < 0.5;
+  if (useA) {
+    return {
+      account: {
+        accessKeyId: env.TEBI_A_ACCESS_KEY_ID,
+        secretAccessKey: env.TEBI_A_SECRET_ACCESS_KEY,
+        bucket: env.TEBI_A_BUCKET,
+        endpoint: env.TEBI_A_ENDPOINT,
+      },
+      name: "A",
+    };
+  }
+  return {
+    account: {
+      accessKeyId: env.TEBI_B_ACCESS_KEY_ID,
+      secretAccessKey: env.TEBI_B_SECRET_ACCESS_KEY,
+      bucket: env.TEBI_B_BUCKET,
+      endpoint: env.TEBI_B_ENDPOINT,
+    },
+    name: "B",
+  };
+}
+
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
-    if (request.method !== "POST") {
-      return new Response(
-        JSON.stringify({ success: false, message: "Method Not Allowed" }),
-        { status: 405, headers: { "Content-Type": "application/json" } }
-      );
+    const url = new URL(request.url);
+
+    // Serve the simple web UI
+    if (request.method === "GET" && url.pathname === "/") {
+      return new Response(html, {
+        headers: { "Content-Type": "text/html; charset=utf-8" },
+      });
     }
 
-    try {
-      const form = await request.formData();
-      const file = form.get("file");
-      if (!(file instanceof File)) {
-        return new Response(
-          JSON.stringify({ success: false, message: "File field not found" }),
-          { status: 400, headers: { "Content-Type": "application/json" } }
-        );
-      }
-
-      // Determine which account to use
-      const account = useAccountA
-        ? {
-            accessKeyId: env.TEBI_A_ACCESS_KEY_ID,
-            secretAccessKey: env.TEBI_A_SECRET_ACCESS_KEY,
-            bucket: env.TEBI_A_BUCKET,
-            endpoint: env.TEBI_A_ENDPOINT,
-          }
-        : {
-            accessKeyId: env.TEBI_B_ACCESS_KEY_ID,
-            secretAccessKey: env.TEBI_B_SECRET_ACCESS_KEY,
-            bucket: env.TEBI_B_BUCKET,
-            endpoint: env.TEBI_B_ENDPOINT,
-          };
-
-      // Toggle for next request
-      useAccountA = !useAccountA;
-
-      const url = await uploadFile(file, account);
-
-      return new Response(JSON.stringify({ success: true, url }), {
+    // Return upload statistics
+    if (request.method === "GET" && url.pathname === "/info") {
+      return new Response(JSON.stringify(stats), {
         headers: { "Content-Type": "application/json" },
       });
-    } catch (err: any) {
-      return new Response(
-        JSON.stringify({ success: false, message: `Upload to Tebi failed: ${err.message || err}` }),
-        { status: 500, headers: { "Content-Type": "application/json" } }
-      );
     }
+
+    // File upload endpoint
+    if (request.method === "POST" && url.pathname === "/upload") {
+      try {
+        const form = await request.formData();
+        const file = form.get("file");
+        if (!(file instanceof File)) {
+          return new Response(
+            JSON.stringify({ success: false, message: "File field not found" }),
+            { status: 400, headers: { "Content-Type": "application/json" } }
+          );
+        }
+
+        const { account, name } = chooseAccount(env);
+        const url = await uploadFile(file, account);
+
+        if (name === "A") stats.byAccountA++; else stats.byAccountB++;
+        stats.total++;
+
+        return new Response(JSON.stringify({ success: true, url }), {
+          headers: { "Content-Type": "application/json" },
+        });
+      } catch (err: any) {
+        return new Response(
+          JSON.stringify({ success: false, message: `Upload to Tebi failed: ${err.message || err}` }),
+          { status: 500, headers: { "Content-Type": "application/json" } }
+        );
+      }
+    }
+
+    return new Response("Not Found", { status: 404 });
   },
 };
