@@ -68,3 +68,45 @@ A lightweight HTML page is included (`frontend.html`) providing a modern interfa
 ## High concurrency considerations
 
 Instead of storing account state globally, the worker randomly selects the target account for each request, avoiding contention when handling many concurrent uploads. Basic in-memory counters keep track of the number of uploads for insight during runtime.
+
+## 部署与搭建教程
+
+以下步骤提供如何在本地开发并部署到 Cloudflare Workers 的指引。
+
+1. 安装 Node.js 18 或更高版本。
+2. 克隆本仓库并安装依赖：
+   ```bash
+   git clone <repo_url>
+   cd tebi
+   npm install
+   ```
+3. 全局安装 [Wrangler](https://developers.cloudflare.com/workers/wrangler/)，这是 Cloudflare Workers 开发工具：
+   ```bash
+   npm install -g wrangler
+   ```
+4. 在项目根目录创建 `wrangler.toml`，写入基本配置：
+   ```toml
+   name = "tebi-uploader"
+   main = "index.ts"
+   compatibility_date = "2024-05-01"
+   ```
+   `name` 可以根据需要修改。
+5. 使用 `wrangler secret put` 设置两个 Tebi 账户的凭证，例如：
+   ```bash
+   wrangler secret put TEBI_A_ACCESS_KEY_ID
+   wrangler secret put TEBI_A_SECRET_ACCESS_KEY
+   # 按照 README 中的环境变量继续设置
+   ```
+   也可以在 Cloudflare 后台的 **Environment Variables** 页面添加。
+6. 本地调试：
+   ```bash
+   wrangler dev
+   ```
+   默认会在 `localhost:8787` 提供接口和前端页面。
+7. 部署到生产环境：
+   ```bash
+   wrangler deploy
+   ```
+   部署完成后，访问生成的 Workers 域名就可以使用 `/upload` 接口或根路径的前端页面上传文件。
+
+更多关于 PicGo 的配置，请参阅 [`PICGO_GUIDE.md`](PICGO_GUIDE.md)。
