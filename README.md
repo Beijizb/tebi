@@ -60,3 +60,11 @@
 ## Repository Contents
 
 This repository provides a Cloudflare Worker script (`index.ts`) implementing the Tebi load-balancing uploader and a PicGo configuration guide (`PICGO_GUIDE.md`).
+
+## Web Front-end
+
+A lightweight HTML page is included (`frontend.html`) providing a modern interface for uploading files and viewing basic statistics. Deploy the worker and visit its root URL to access the UI. It communicates with `/upload` for uploads and `/info` for statistics.
+
+## High concurrency considerations
+
+Instead of storing account state globally, the worker randomly selects the target account for each request, avoiding contention when handling many concurrent uploads. Basic in-memory counters keep track of the number of uploads for insight during runtime.
