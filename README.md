@@ -54,3 +54,9 @@
    * 设定文件字段名 (默认是 file，如果你的代码有改动请指出)
    * 设定 JSON 路径 (应该填 url)
    * 设定自定义请求头 (如果需要的话，例如用于身份验证的 Authorization 头)
+
+---
+
+## Repository Contents
+
+This repository provides a Cloudflare Worker script (`index.ts`) implementing the Tebi load-balancing uploader and a PicGo configuration guide (`PICGO_GUIDE.md`).
