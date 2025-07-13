@@ -110,3 +110,7 @@ Instead of storing account state globally, the worker randomly selects the targe
    部署完成后，访问生成的 Workers 域名就可以使用 `/upload` 接口或根路径的前端页面上传文件。
 
 更多关于 PicGo 的配置，请参阅 [`PICGO_GUIDE.md`](PICGO_GUIDE.md)。
+
+## 常见问题排查
+
+如果在执行 `wrangler dev` 或 `wrangler deploy` 时看到 `API Request Failed` 的报错，通常是认证信息缺失或失效导致。请确保已经执行 `wrangler login` 或设置有效的 `CLOUDFLARE_API_TOKEN` 环境变量，并且 `account_id` 与 API Token 拥有足够的权限。
