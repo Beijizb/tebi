@@ -1,5 +1,25 @@
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 
+// Common headers for JSON responses with CORS enabled
+function jsonResponse(body: unknown, init: ResponseInit = {}): Response {
+  const headers = new Headers(init.headers);
+  headers.set("Content-Type", "application/json");
+  headers.set("Access-Control-Allow-Origin", "*");
+  return new Response(JSON.stringify(body), { ...init, headers });
+}
+
+// Handle CORS preflight requests
+function handleOptions(): Response {
+  return new Response(null, {
+    status: 204,
+    headers: {
+      "Access-Control-Allow-Origin": "*",
+      "Access-Control-Allow-Methods": "POST, GET, OPTIONS",
+      "Access-Control-Allow-Headers": "*",
+    },
+  });
+}
+
 /**
  * Enhanced Cloudflare Worker for uploading files to Tebi with basic load
  * balancing and a small web UI. Designed to handle many concurrent
@@ -32,6 +52,28 @@ interface Account {
   secretAccessKey: string;
   bucket: string;
   endpoint: string;
+}
+
+let cachedAccounts: { A: Account; B: Account } | null = null;
+
+function getAccounts(env: Env): { A: Account; B: Account } {
+  if (!cachedAccounts) {
+    cachedAccounts = {
+      A: {
+        accessKeyId: env.TEBI_A_ACCESS_KEY_ID,
+        secretAccessKey: env.TEBI_A_SECRET_ACCESS_KEY,
+        bucket: env.TEBI_A_BUCKET,
+        endpoint: env.TEBI_A_ENDPOINT,
+      },
+      B: {
+        accessKeyId: env.TEBI_B_ACCESS_KEY_ID,
+        secretAccessKey: env.TEBI_B_SECRET_ACCESS_KEY,
+        bucket: env.TEBI_B_BUCKET,
+        endpoint: env.TEBI_B_ENDPOINT,
+      },
+    };
+  }
+  return cachedAccounts;
 }
 
 // Simple in-memory stats. These reset when the Worker restarts but
@@ -80,46 +122,36 @@ async function uploadFile(file: File, account: Account): Promise<string> {
 }
 
 function chooseAccount(env: Env): { account: Account; name: "A" | "B" } {
+  const { A, B } = getAccounts(env);
   // Use random selection to avoid contention between concurrent requests
   const useA = Math.random() < 0.5;
   if (useA) {
-    return {
-      account: {
-        accessKeyId: env.TEBI_A_ACCESS_KEY_ID,
-        secretAccessKey: env.TEBI_A_SECRET_ACCESS_KEY,
-        bucket: env.TEBI_A_BUCKET,
-        endpoint: env.TEBI_A_ENDPOINT,
-      },
-      name: "A",
-    };
+    return { account: A, name: "A" };
   }
-  return {
-    account: {
-      accessKeyId: env.TEBI_B_ACCESS_KEY_ID,
-      secretAccessKey: env.TEBI_B_SECRET_ACCESS_KEY,
-      bucket: env.TEBI_B_BUCKET,
-      endpoint: env.TEBI_B_ENDPOINT,
-    },
-    name: "B",
-  };
+  return { account: B, name: "B" };
 }
 
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
 
+    if (request.method === "OPTIONS") {
+      return handleOptions();
+    }
+
     // Serve the simple web UI
     if (request.method === "GET" && url.pathname === "/") {
       return new Response(html, {
-        headers: { "Content-Type": "text/html; charset=utf-8" },
+        headers: {
+          "Content-Type": "text/html; charset=utf-8",
+          "Access-Control-Allow-Origin": "*",
+        },
       });
     }
 
     // Return upload statistics
     if (request.method === "GET" && url.pathname === "/info") {
-      return new Response(JSON.stringify(stats), {
-        headers: { "Content-Type": "application/json" },
-      });
+      return jsonResponse(stats);
     }
 
     // File upload endpoint
@@ -128,9 +160,9 @@ export default {
         const form = await request.formData();
         const file = form.get("file");
         if (!(file instanceof File)) {
-          return new Response(
-            JSON.stringify({ success: false, message: "File field not found" }),
-            { status: 400, headers: { "Content-Type": "application/json" } }
+          return jsonResponse(
+            { success: false, message: "File field not found" },
+            { status: 400 }
           );
         }
 
@@ -140,17 +172,15 @@ export default {
         if (name === "A") stats.byAccountA++; else stats.byAccountB++;
         stats.total++;
 
-        return new Response(JSON.stringify({ success: true, url }), {
-          headers: { "Content-Type": "application/json" },
-        });
+        return jsonResponse({ success: true, url });
       } catch (err: any) {
-        return new Response(
-          JSON.stringify({ success: false, message: `Upload to Tebi failed: ${err.message || err}` }),
-          { status: 500, headers: { "Content-Type": "application/json" } }
+        return jsonResponse(
+          { success: false, message: `Upload to Tebi failed: ${err.message || err}` },
+          { status: 500 }
         );
       }
     }
 
-    return new Response("Not Found", { status: 404 });
+    return jsonResponse({ success: false, message: "Not Found" }, { status: 404 });
   },
 };
